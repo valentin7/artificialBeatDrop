@@ -10,12 +10,75 @@ import re
 import operator
 import math
 
+import magenta
+#from magenta.models.melody_rnn import melody_rnn_create_dataset
+from magenta.models.melody_rnn import melody_rnn_model
+
 
 def main():
+    mode = 'train'
+    config = None
+    midi_path = 'midi/classical'
+
+    default_configs = {
+    'basic_rnn': MelodyRnnConfig(
+        magenta.protobuf.generator_pb2.GeneratorDetails(
+            id='basic_rnn',
+            description='Melody RNN with one-hot encoding.'),
+        magenta.music.OneHotEventSequenceEncoderDecoder(
+            magenta.music.MelodyOneHotEncoding(
+                min_note=DEFAULT_MIN_NOTE,
+                max_note=DEFAULT_MAX_NOTE)),
+        magenta.common.HParams(
+            batch_size=128,
+            rnn_layer_sizes=[128, 128],
+            dropout_keep_prob=0.5,
+            skip_first_n_losses=0,
+            clip_norm=5,
+            initial_learning_rate=0.01,
+            decay_steps=1000,
+            decay_rate=0.85)),
+    'lookback_rnn': MelodyRnnConfig(
+        magenta.protobuf.generator_pb2.GeneratorDetails(
+            id='lookback_rnn',
+            description='Melody RNN with lookback encoding.'),
+        magenta.music.LookbackEventSequenceEncoderDecoder(
+            magenta.music.MelodyOneHotEncoding(
+                min_note=DEFAULT_MIN_NOTE,
+                max_note=DEFAULT_MAX_NOTE)),
+        magenta.common.HParams(
+            batch_size=128,
+            rnn_layer_sizes=[128, 128],
+            dropout_keep_prob=0.5,
+            skip_first_n_losses=0,
+            clip_norm=5,
+            initial_learning_rate=0.01,
+            decay_steps=1000,
+            decay_rate=0.95)),
+    'attention_rnn': MelodyRnnConfig(
+        magenta.protobuf.generator_pb2.GeneratorDetails(
+            id='attention_rnn',
+            description='Melody RNN with lookback encoding and attention.'),
+        magenta.music.KeyMelodyEncoderDecoder(
+            min_note=DEFAULT_MIN_NOTE,
+            max_note=DEFAULT_MAX_NOTE),
+        magenta.common.HParams(
+            batch_size=128,
+            rnn_layer_sizes=[128, 128],
+            dropout_keep_prob=0.5,
+            skip_first_n_losses=0,
+            attn_length=40,
+            clip_norm=3,
+            initial_learning_rate=0.001,
+            decay_steps=1000,
+            decay_rate=0.97))
+    }
+
+    build_graph(mode, default_configs, midi_path)
+    tf.Session.run()
 
 
-
-def build_graph(mode, config, sequence_protos=None):
+def build_graph(mode, config, midi_files):
   """Builds the TensorFlow graph.
   Args:
     mode: 'train', 'eval', or 'generate'. Only mode related ops are added to
@@ -51,8 +114,7 @@ def build_graph(mode, config, sequence_protos=None):
   state_is_tuple = True
 
   if mode == 'train' or mode == 'eval':
-    inputs, labels, lengths = get_padded_batch(
-        [sequence_protos], hparams.batch_size, input_size)
+    inputs, labels, lengths = midi_files_to_sequence_proto(midi_files, hparams.batch_size, input_size)
 
   elif mode == 'generate':
     inputs = tf.placeholder(tf.float32, [hparams.batch_size, None,
@@ -159,12 +221,6 @@ def build_graph(mode, config, sequence_protos=None):
     tf.add_to_collection('final_state', final_state)
     tf.add_to_collection('temperature', temperature)
     tf.add_to_collection('softmax', softmax)
-
-
-
-
-
-  return graph
 
 def midi_files_to_sequence_proto(midi_files, batch_size, input_size):
     sequences = [midi_file_to_sequence_proto(midi_file, batch_size, input_size) for midi_file in midi_files]
