@@ -13,6 +13,11 @@ import math
 import magenta
 #from magenta.models.melody_rnn import melody_rnn_create_dataset
 from magenta.models.melody_rnn import melody_rnn_model
+import magenta.music as mm
+
+DEFAULT_MIN_NOTE = 0
+DEFAULT_MAX_NOTE = 128
+DEFAULT_TRANSPOSE_TO_KEY = 0
 
 
 def main():
@@ -74,7 +79,7 @@ def main():
             decay_rate=0.97))
     }
 
-    build_graph(mode, default_configs, midi_path)
+    build_graph(mode, default_configs['basic_rnn'], midi_path)
     tf.Session.run()
 
 
@@ -409,6 +414,51 @@ def get_padded_batch(sequence, batch_size, input_size):
                                 length])] * num_enqueuing_threads
   tf.train.add_queue_runner(tf.train.QueueRunner(queue, enqueue_ops))
   return queue.dequeue_many(batch_size)
+
+class MelodyRnnConfig(object):
+  """Stores a configuration for a MelodyRnn.
+  You can change `min_note` and `max_note` to increase/decrease the melody
+  range. Since melodies are transposed into this range to be run through
+  the model and then transposed back into their original range after the
+  melodies have been extended, the location of the range is somewhat
+  arbitrary, but the size of the range determines the possible size of the
+  generated melodies range. `transpose_to_key` should be set to the key
+  that if melodies were transposed into that key, they would best sit
+  between `min_note` and `max_note` with having as few notes outside that
+  range.
+  Attributes:
+    details: The GeneratorDetails message describing the config.
+    encoder_decoder: The EventSequenceEncoderDecoder object to use.
+    hparams: The HParams containing hyperparameters to use.
+    min_note: The minimum midi pitch the encoded melodies can have.
+    max_note: The maximum midi pitch (exclusive) the encoded melodies can have.
+    transpose_to_key: The key that encoded melodies will be transposed into, or
+        None if it should not be transposed.
+  """
+
+  def __init__(self, details, encoder_decoder, hparams,
+               min_note=DEFAULT_MIN_NOTE, max_note=DEFAULT_MAX_NOTE,
+               transpose_to_key=DEFAULT_TRANSPOSE_TO_KEY):
+    if min_note < mm.MIN_MIDI_PITCH:
+      raise ValueError('min_note must be >= 0. min_note is %d.' % min_note)
+    if max_note > mm.MAX_MIDI_PITCH + 1:
+      raise ValueError('max_note must be <= 128. max_note is %d.' % max_note)
+    if max_note - min_note < mm.NOTES_PER_OCTAVE:
+      raise ValueError('max_note - min_note must be >= 12. min_note is %d. '
+                       'max_note is %d. max_note - min_note is %d.' %
+                       (min_note, max_note, max_note - min_note))
+    if (transpose_to_key is not None and
+        (transpose_to_key < 0 or transpose_to_key > mm.NOTES_PER_OCTAVE - 1)):
+      raise ValueError('transpose_to_key must be >= 0 and <= 11. '
+                       'transpose_to_key is %d.' % transpose_to_key)
+
+    self.details = details
+    self.encoder_decoder = encoder_decoder
+    self.hparams = hparams
+    self.min_note = min_note
+    self.max_note = max_note
+    self.transpose_to_key = transpose_to_key
+
 
 if __name__ == '__main__':
     main()
