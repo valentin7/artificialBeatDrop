@@ -4,26 +4,46 @@ from __future__ import print_function
 
 # Import data
 #from tqdm import tqdm
-#import tensorflow as tf
+import tensorflow as tf
 #import numpy as np
 import re
 import operator
 import math
+from os import listdir
+from os.path import isfile, join
 
 import magenta
+import pretty_midi
+
 #from magenta.models.melody_rnn import melody_rnn_create_dataset
 from magenta.models.melody_rnn import melody_rnn_model
 import magenta.music as mm
+
+import sys
+# pylint: disable=g-import-not-at-top
+if sys.version_info.major <= 2:
+  from cStringIO import StringIO
+else:
+  from io import StringIO
+
+from magenta.music import constants
+from magenta.protobuf import music_pb2
+
 
 DEFAULT_MIN_NOTE = 0
 DEFAULT_MAX_NOTE = 128
 DEFAULT_TRANSPOSE_TO_KEY = 0
 
 
+
+
+class MIDIConversionError(Exception):
+  pass
+
 def main():
     mode = 'train'
     config = None
-    midi_path = 'midi/classical'
+    midi_path = '../midi/classical/'
 
     default_configs = {
     'basic_rnn': MelodyRnnConfig(
@@ -79,7 +99,10 @@ def main():
             decay_rate=0.97))
     }
 
-    build_graph(mode, default_configs['basic_rnn'], midi_path)
+    #folder = open()
+    onlyfiles = [midi_path + f for f in listdir(midi_path) if isfile(join(midi_path, f))]
+
+    build_graph(mode, default_configs['basic_rnn'], onlyfiles)
     tf.Session.run()
 
 
@@ -105,6 +128,7 @@ def build_graph(mode, config, midi_files):
                      "or 'generate'. The mode parameter was: %s" % mode)
 
   hparams = config.hparams
+  print("midi_FILES is ", midi_files)
   encoder_decoder = config.encoder_decoder
 
   tf.logging.info('hparams = %s', hparams.values())
@@ -228,8 +252,8 @@ def build_graph(mode, config, midi_files):
     tf.add_to_collection('softmax', softmax)
 
 def midi_files_to_sequence_proto(midi_files, batch_size, input_size):
-    sequences = [midi_file_to_sequence_proto(midi_file, batch_size, input_size) for midi_file in midi_files]
-    return get_padded_batch(sequences, batch_size, input_size)
+    sequences = filter(lambda x: x != None, [midi_file_to_sequence_proto(midi_file, batch_size, input_size) for midi_file in midi_files])
+    return get_padded_batch(sequences[0], batch_size, input_size)
 
 def midi_file_to_sequence_proto(midi_file, batch_size, input_size):
   """Converts MIDI file to a tensorflow.magenta.NoteSequence proto.
@@ -242,7 +266,6 @@ def midi_file_to_sequence_proto(midi_file, batch_size, input_size):
   """
   with tf.gfile.Open(midi_file, 'r') as f:
     midi_data = f.read()
-
   # In practice many MIDI files cannot be decoded with pretty_midi. Catch all
   # errors here and try to log a meaningful message. So many different
   # exceptions are raised in pretty_midi.PrettyMidi that it is cumbersome to
@@ -254,8 +277,9 @@ def midi_file_to_sequence_proto(midi_file, batch_size, input_size):
     try:
       midi = pretty_midi.PrettyMIDI(StringIO(midi_data))
     except:
-      raise MIDIConversionError('Midi decoding error %s: %s' %
-                                (sys.exc_info()[0], sys.exc_info()[1]))
+      return None
+      #raise MIDIConversionError('Midi decoding error %s: %s' %
+        #                        (sys.exc_info()[0], sys.exc_info()[1]))
   # pylint: enable=bare-except
 
   sequence = music_pb2.NoteSequence()
@@ -284,12 +308,14 @@ def midi_file_to_sequence_proto(midi_file, batch_size, input_size):
     key_signature.time = midi_key.time
     key_signature.key = midi_key.key_number % 12
     midi_mode = midi_key.key_number / 12
+    print("OUR MIDI_MODE is ", midi_mode)
     if midi_mode == 0:
       key_signature.mode = key_signature.MAJOR
-    elif midi_mode == 1:
+    else: #midi_mode == 1:
       key_signature.mode = key_signature.MINOR
-    else:
-      raise MIDIConversionError('Invalid midi_mode %i' % midi_mode)
+      #remember this is fvcked
+    #else:
+     # raise MIDIConversionError('Invalid midi_mode %i' % midi_mode)
 
   # Populate tempo changes.
   tempo_times, tempo_qpms = midi.get_tempo_changes()
