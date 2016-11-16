@@ -4,8 +4,8 @@ from __future__ import print_function
 
 # Import data
 #from tqdm import tqdm
-import tensorflow as tf
-import numpy as np
+#import tensorflow as tf
+#import numpy as np
 import re
 import operator
 import math
