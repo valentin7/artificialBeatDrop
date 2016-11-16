@@ -252,8 +252,13 @@ def build_graph(mode, config, midi_files):
     tf.add_to_collection('softmax', softmax)
 
 def midi_files_to_sequence_proto(midi_files, batch_size, input_size):
-    sequences = filter(lambda x: x != None, [midi_file_to_sequence_proto(midi_file, batch_size, input_size) for midi_file in midi_files])
-    return get_padded_batch(sequences[0], batch_size, input_size)
+    all_events = filter(lambda x: x != None, [midi_file_to_sequence_proto(midi_file, batch_size, input_size) for midi_file in midi_files])
+    examples = []
+    for events in all_events:
+      melody = melodies_lib.Melody(events)
+      melody.squash(0,128,0)
+      examples.append(self.med.encode(melody))
+    return get_padded_batch(events, batch_size, input_size)
 
 def midi_file_to_sequence_proto(midi_file, batch_size, input_size):
   """Converts MIDI file to a tensorflow.magenta.NoteSequence proto.
@@ -396,7 +401,7 @@ def make_sequence_example(inputs, labels):
   return tf.train.SequenceExample(feature_lists=feature_lists)
 
 
-def get_padded_batch(sequence, batch_size, input_size):
+def get_padded_batch(examples, batch_size, input_size):
   """Reads batches of SequenceExamples from TFRecords and pads them.
   Can deal with variable length SequenceExamples by padding each batch to the
   length of the longest sequence with zeros.
@@ -414,19 +419,19 @@ def get_padded_batch(sequence, batch_size, input_size):
         SequenceExample before padding.
   """
   num_enqueuing_threads = 4
-  # file_queue = tf.train.string_input_producer(file_list)
-  # reader = tf.TFRecordReader()
-  # _, serialized_example = reader.read(file_queue)
+  sequence = tf.train.string_input_producer(examples)
+  #reader = tf.TFRecordReader()
+  #_, serialized_example = reader.read(file_queue)
 
 
-  sequence_features = {
-      'inputs': tf.FixedLenSequenceFeature(shape=[input_size],
-                                           dtype=tf.float32),
-      'labels': tf.FixedLenSequenceFeature(shape=[],
-                                           dtype=tf.int64)}
+  #sequence_features = {
+  #    'inputs': tf.FixedLenSequenceFeature(shape=[input_size],
+  #                                         dtype=tf.float32),
+  #    'labels': tf.FixedLenSequenceFeature(shape=[],
+  #                                         dtype=tf.int64)}
 
   #_, sequence = tf.parse_single_sequence_example(
-    #  serialized_example, sequence_features=sequence_features)
+  #    serialized_example, sequence_features=sequence_features)
 
   length = tf.shape(sequence['inputs'])[0]
 
