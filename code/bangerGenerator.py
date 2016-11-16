@@ -18,6 +18,11 @@ import pretty_midi
 #from magenta.models.melody_rnn import melody_rnn_create_dataset
 from magenta.models.melody_rnn import melody_rnn_model
 import magenta.music as mm
+from magenta.music import melodies_lib
+from magenta.pipelines import melody_pipelines
+from magenta.pipelines import pipelines_common
+from magenta.music import sequences_lib
+
 
 import sys
 # pylint: disable=g-import-not-at-top
@@ -128,7 +133,7 @@ def build_graph(mode, config, midi_files):
                      "or 'generate'. The mode parameter was: %s" % mode)
 
   hparams = config.hparams
-  print("midi_FILES is ", midi_files)
+  #print("midi_FILES is ", midi_files)
   encoder_decoder = config.encoder_decoder
 
   tf.logging.info('hparams = %s', hparams.values())
@@ -252,13 +257,56 @@ def build_graph(mode, config, midi_files):
     tf.add_to_collection('softmax', softmax)
 
 def midi_files_to_sequence_proto(midi_files, batch_size, input_size):
-    all_events = filter(lambda x: x != None, [midi_file_to_sequence_proto(midi_file, batch_size, input_size) for midi_file in midi_files])
+    all_sequences = filter(lambda x: x != None, [midi_file_to_sequence_proto(midi_file, batch_size, input_size) for midi_file in midi_files])
     examples = []
-    for events in all_events:
-      melody = melodies_lib.Melody(events)
-      melody.squash(0,128,0)
-      examples.append(self.med.encode(melody))
-    return get_padded_batch(events, batch_size, input_size)
+    #print("All our events are: ", all_events)
+
+
+    unit = melody_pipelines.MelodyExtractor(
+       min_bars=1, min_unique_pitches=1, gap_bars=1)
+
+    melody_extractor = melody_pipelines.MelodyExtractor(
+          min_bars=7, min_unique_pitches=5, gap_bars=1.0,
+          ignore_polyphonic_notes=False)
+
+    quantizer = pipelines_common.Quantizer(steps_per_quarter=4)
+    one_hot_encoding = magenta.music.OneHotEventSequenceEncoderDecoder(
+      magenta.music.MelodyOneHotEncoding(
+          0  , 128))
+
+    for note_sequence in all_sequences:
+      print("a note_sequence is ")
+      #quantized_sequence = sequences_lib.quantize_note_sequence(
+        # note_sequence, steps_per_quarter=1)
+      #quantized_sequence = mm.quantize_note_sequence(note_sequence, steps_per_quarter=1)
+      #outputs = unit.transform(quantized_sequence)
+      single_quant = quantizer.transform(note_sequence)
+      print("single quant seq is: ", single_quant)
+
+     # quantized = quantizer.transform(note_sequence)
+      print("single quant is: ", single_quant)
+      melody = melody_extractor.transform(single_quant)
+      print("outputs/melody is ", outputs)
+
+
+      #melody = outputs
+    #   self.config.min_note,
+    #   self.config.max_note,
+    #   self.config.transpose_to_key)
+      melody.squash(
+            0,
+            128,
+            0)
+      one_hot = one_hot_encoding.encode(melody)
+      examples.append(one_hot)
+
+      #seq_example =
+      #seq_example = make_sequence_example(inputs, labels)
+      #examples.append(seq_example)
+    #   melody = melodies_lib.Melody(events.notes)
+    #   melody.squash(0,128,0)
+    #   examples.append(self.med.encode(melody))
+    return get_padded_batch(examples, batch_size, input_size)
 
 def midi_file_to_sequence_proto(midi_file, batch_size, input_size):
   """Converts MIDI file to a tensorflow.magenta.NoteSequence proto.
@@ -313,7 +361,7 @@ def midi_file_to_sequence_proto(midi_file, batch_size, input_size):
     key_signature.time = midi_key.time
     key_signature.key = midi_key.key_number % 12
     midi_mode = midi_key.key_number / 12
-    print("OUR MIDI_MODE is ", midi_mode)
+    #print("OUR MIDI_MODE is ", midi_mode)
     if midi_mode == 0:
       key_signature.mode = key_signature.MAJOR
     else: #midi_mode == 1:
