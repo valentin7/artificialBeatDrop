@@ -280,14 +280,15 @@ def midi_files_to_sequence_proto(midi_files, batch_size, input_size):
     for note_sequence in all_sequences:
       #quantized_sequence = quantize_note_sequence(
         # note_sequence, steps_per_quarter=1)
-      #quantized_sequence = mm.sequences_lib.quantize_note_sequence(note_sequence, steps_per_quarter=1)
-        #outputs = unit.transform(quantized_sequence)
+      #quantized_sequence = mm.quantize_note_sequence(note_sequence, steps_per_quarter=1)
+      #outputs = unit.transform(quantized_sequence)
       #single_quant = quantizer.transform(note_sequence)
-      #print("single quant seq is: ", quantized_sequence)
+      #print("single quant seq is: ", single_quant)
 
      # quantized = quantizer.transform(note_sequence)
-      #print("single quant is: ", quantized_sequence)
-      melody = melody_extractor.transform(note_sequence)
+      #print("single quant is: ", single_quant)
+      single_quant = note_sequence
+      melody = melody_extractor.transform(single_quant)
       print("outputs/melody is ", outputs)
 
 
