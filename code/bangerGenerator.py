@@ -11,6 +11,7 @@ import operator
 import math
 from os import listdir
 from os.path import isfile, join
+import copy
 
 import magenta
 import pretty_midi
@@ -23,7 +24,6 @@ from magenta.pipelines import melody_pipelines
 from magenta.pipelines import pipelines_common
 from magenta.music import sequences_lib
 
-
 import sys
 # pylint: disable=g-import-not-at-top
 if sys.version_info.major <= 2:
@@ -32,15 +32,34 @@ else:
   from io import StringIO
 
 from magenta.music import constants
-from magenta.protobuf import music_pb2
-
+#from magenta.protobuf import music_pb2
 
 DEFAULT_MIN_NOTE = 0
 DEFAULT_MAX_NOTE = 128
 DEFAULT_TRANSPOSE_TO_KEY = 0
 
 
+QUANTIZE_CUTOFF = 0.5
 
+# Shortcut to chord symbol text annotation type.
+CHORD_SYMBOL = NoteSequence.TextAnnotation.CHORD_SYMBOL
+
+
+
+class BadTimeSignatureException(Exception):
+  pass
+
+
+class MultipleTimeSignatureException(Exception):
+  pass
+
+
+class MultipleTempoException(Exception):
+  pass
+
+
+class NegativeTimeException(Exception):
+  pass
 
 class MIDIConversionError(Exception):
   pass
@@ -112,22 +131,6 @@ def main():
 
 
 def build_graph(mode, config, midi_files):
-  """Builds the TensorFlow graph.
-  Args:
-    mode: 'train', 'eval', or 'generate'. Only mode related ops are added to
-        the graph.
-    config: A MelodyRnnConfig containing the MelodyEncoderDecoder and HParams to
-        use.
-    sequence_protos: A string path to a TFRecord file containing
-        tf.train.SequenceExample protos. Only needed for training and
-        evaluation.
-  Returns:
-    A tf.Graph instance which contains the TF ops.
-  Raises:
-    ValueError: If mode is not 'train', 'eval', or 'generate', or if
-        sequence_protos does not match a file when mode is 'train' or
-        'eval'.
-  """
   if mode not in ('train', 'eval', 'generate'):
     raise ValueError("The mode parameter must be 'train', 'eval', "
                      "or 'generate'. The mode parameter was: %s" % mode)
@@ -275,17 +278,16 @@ def midi_files_to_sequence_proto(midi_files, batch_size, input_size):
           0  , 128))
 
     for note_sequence in all_sequences:
-      print("a note_sequence is ")
-      #quantized_sequence = sequences_lib.quantize_note_sequence(
+      #quantized_sequence = quantize_note_sequence(
         # note_sequence, steps_per_quarter=1)
-      #quantized_sequence = mm.quantize_note_sequence(note_sequence, steps_per_quarter=1)
-      #outputs = unit.transform(quantized_sequence)
-      single_quant = quantizer.transform(note_sequence)
-      print("single quant seq is: ", single_quant)
+      #quantized_sequence = mm.sequences_lib.quantize_note_sequence(note_sequence, steps_per_quarter=1)
+        #outputs = unit.transform(quantized_sequence)
+      #single_quant = quantizer.transform(note_sequence)
+      #print("single quant seq is: ", quantized_sequence)
 
      # quantized = quantizer.transform(note_sequence)
-      print("single quant is: ", single_quant)
-      melody = melody_extractor.transform(single_quant)
+      #print("single quant is: ", quantized_sequence)
+      melody = melody_extractor.transform(note_sequence)
       print("outputs/melody is ", outputs)
 
 
@@ -306,6 +308,8 @@ def midi_files_to_sequence_proto(midi_files, batch_size, input_size):
     #   melody = melodies_lib.Melody(events.notes)
     #   melody.squash(0,128,0)
     #   examples.append(self.med.encode(melody))
+
+    print("done with a batch!!!")
     return get_padded_batch(examples, batch_size, input_size)
 
 def midi_file_to_sequence_proto(midi_file, batch_size, input_size):
@@ -494,6 +498,124 @@ def get_padded_batch(examples, batch_size, input_size):
   tf.train.add_queue_runner(tf.train.QueueRunner(queue, enqueue_ops))
   return queue.dequeue_many(batch_size)
 
+def _is_power_of_2(x):
+  return x and not x & (x - 1)
+
+def quantize_note_sequence(note_sequence, steps_per_quarter):
+  """Quantize a NoteSequence proto.
+  The input NoteSequence is copied and quantization-related fields are
+  populated.
+  Note start and end times, and chord times are snapped to a nearby quantized
+  step, and the resulting times are stored in a separate field (e.g.,
+  quantized_start_step). See the comments above `QUANTIZE_CUTOFF` for details on
+  how the quantizing algorithm works.
+  Args:
+    note_sequence: A music_pb2.NoteSequence protocol buffer.
+    steps_per_quarter: Each quarter note of music will be divided into this
+        many quantized time steps.
+  Returns:
+    A copy of the original NoteSequence, with quantized times added.
+  Raises:
+    MultipleTimeSignatureException: If there is a change in time signature
+        in `note_sequence`.
+    MultipleTempoException: If there is a change in tempo in `note_sequence`.
+    BadTimeSignatureException: If the time signature found in `note_sequence`
+        has a denominator which is not a power of 2.
+    NegativeTimeException: If a note or chord occurs at a negative time.
+  """
+  qns = copy.deepcopy(note_sequence)
+
+  qns.quantization_info.steps_per_quarter = steps_per_quarter
+
+  if qns.time_signatures:
+    time_signatures = sorted(qns.time_signatures, key=lambda ts: ts.time)
+    # There is an implicit 4/4 time signature at 0 time. So if the first time
+    # signature is something other than 4/4 and it's at a time other than 0,
+    # that's an implicit time signature change.
+    if time_signatures[0].time != 0 and not (
+        time_signatures[0].numerator == 4 and
+        time_signatures[0].denominator == 4):
+      raise MultipleTimeSignatureException(
+          'NoteSequence has an implicit change from initial 4/4 time '
+          'signature.')
+
+    #for time_signature in time_signatures[1:]:
+    #  if (time_signature.numerator != qns.time_signatures[0].numerator or
+    #      time_signature.denominator != qns.time_signatures[0].denominator):
+    #    raise MultipleTimeSignatureException(
+    #        'NoteSequence has at least one time signature change.')
+
+    # Make it clear that there is only 1 time signature and it starts at the
+    # beginning.
+    qns.time_signatures[0].time = 0
+    del qns.time_signatures[1:]
+  else:
+    time_signature = qns.time_signatures.add()
+    time_signature.numerator = 4
+    time_signature.denominator = 4
+    time_signature.time = 0
+
+  if not _is_power_of_2(qns.time_signatures[0].denominator):
+    raise BadTimeSignatureException(
+        'Denominator is not a power of 2. Time signature: %d/%d' %
+        (qns.time_signatures[0].numerator, qns.time_signatures[0].denominator))
+
+  if qns.tempos:
+    tempos = sorted(qns.tempos, key=lambda t: t.time)
+    # There is an implicit 120.0 qpm tempo at 0 time. So if the first tempo is
+    # something other that 120.0 and it's at a time other than 0, that's an
+    # implicit tempo change.
+    #if tempos[0].time != 0 and (
+    #    tempos[0].qpm != constants.DEFAULT_QUARTERS_PER_MINUTE):
+    #  raise MultipleTempoException(
+    #      'NoteSequence has an implicit tempo change from initial 120.0 qpm')
+
+    #for tempo in tempos[1:]:
+    #  if tempo.qpm != qns.tempos[0].qpm:
+    #    raise MultipleTempoException(
+    #        'NoteSequence has at least one tempo change.')
+    # Make it clear that there is only 1 tempo and it starts at the beginning.
+    qns.tempos[0].time = 0
+    del qns.tempos[1:]
+  else:
+    tempo = qns.tempos.add()
+    tempo.qpm = constants.DEFAULT_QUARTERS_PER_MINUTE
+    tempo.time = 0
+
+  # Compute quantization steps per second.
+  steps_per_second = steps_per_quarter * qns.tempos[0].qpm / 60.0
+
+  quantize = lambda x: int(x + (1 - QUANTIZE_CUTOFF))
+
+  qns.total_quantized_steps = quantize(qns.total_time * steps_per_second)
+
+  for note in qns.notes:
+    # Quantize the start and end times of the note.
+    note.quantized_start_step = quantize(note.start_time * steps_per_second)
+    note.quantized_end_step = quantize(note.end_time * steps_per_second)
+    if note.quantized_end_step == note.quantized_start_step:
+      note.quantized_end_step += 1
+
+    # Do not allow notes to start or end in negative time.
+    if note.quantized_start_step < 0 or note.quantized_end_step < 0:
+      raise NegativeTimeException(
+          'Got negative note time: start_step = %s, end_step = %s' %
+          (note.quantized_start_step, note.quantized_end_step))
+
+    # Extend quantized sequence if necessary.
+    if note.quantized_end_step > qns.total_quantized_steps:
+      qns.total_quantized_steps = note.quantized_end_step
+
+  # Also quantize chord symbol annotations.
+  for annotation in qns.text_annotations:
+    # Quantize the chord time, disallowing negative time.
+    annotation.quantized_step = quantize(annotation.time * steps_per_second)
+    if annotation.quantized_step < 0:
+      raise NegativeTimeException(
+          'Got negative chord time: step = %s' % annotation.quantized_step)
+
+  return qns
+
 class MelodyRnnConfig(object):
   """Stores a configuration for a MelodyRnn.
   You can change `min_note` and `max_note` to increase/decrease the melody
@@ -537,6 +659,7 @@ class MelodyRnnConfig(object):
     self.min_note = min_note
     self.max_note = max_note
     self.transpose_to_key = transpose_to_key
+
 
 
 if __name__ == '__main__':
